@@ -1,0 +1,22 @@
+cat > .gitignore <<'EOF'
+# Python
+__pycache__/
+*.pyc
+
+# Local buffers / runtime
+_buffer/
+airflow/logs/
+airflow/plugins/
+*.log
+
+# Env / secrets
+.env
+*.env
+.envrc
+
+# Mac
+.DS_Store
+
+# AWS creds mount (never commit)
+.aws/
+EOF

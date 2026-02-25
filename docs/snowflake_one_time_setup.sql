@@ -1,0 +1,47 @@
+-- One-time Snowflake setup for Retail AI Stockout Platform
+-- Run these manually in Snowflake (Worksheet / Snowsql)
+-- NOTE: Storage Integration requires ACCOUNTADMIN or a privileged role.
+
+-- 1) Core DB + Schemas
+CREATE OR REPLACE DATABASE RETAIL_AI;
+
+CREATE OR REPLACE SCHEMA RETAIL_AI.STAGING;
+CREATE SCHEMA IF NOT EXISTS RETAIL_AI.BRONZE;
+CREATE SCHEMA IF NOT EXISTS RETAIL_AI.SILVER;
+CREATE SCHEMA IF NOT EXISTS RETAIL_AI.GOLD;
+
+-- 2) File format (JSONL = one JSON object per line)
+CREATE OR REPLACE FILE FORMAT RETAIL_AI.STAGING.JSONL_FORMAT
+  TYPE = JSON;
+
+-- 3) Storage integration (S3)
+-- Replace with your AWS IAM Role ARN that Snowflake can assume.
+CREATE OR REPLACE STORAGE INTEGRATION S3_INT_RETAIL
+  TYPE = EXTERNAL_STAGE
+  STORAGE_PROVIDER = S3
+  ENABLED = TRUE
+  STORAGE_AWS_ROLE_ARN = '<AWS_IAM_ROLE_ARN>'
+  STORAGE_ALLOWED_LOCATIONS = ('s3://retail-ai-platform-darshini-001/');
+
+-- Get the Snowflake-generated IAM user/External ID and add it to your AWS role trust policy:
+DESC INTEGRATION S3_INT_RETAIL;
+
+-- 4) External stage pointing to raw S3 prefix
+CREATE OR REPLACE STAGE RETAIL_AI.BRONZE.S3_RAW_STAGE
+  URL = 's3://retail-ai-platform-darshini-001/retail/raw/'
+  STORAGE_INTEGRATION = S3_INT_RETAIL
+  FILE_FORMAT = (FORMAT_NAME = RETAIL_AI.STAGING.JSONL_FORMAT);
+
+-- 5) Bronze raw table (variant payload)
+CREATE TABLE IF NOT EXISTS RETAIL_AI.BRONZE.RAW_EVENTS (
+  INGESTED_AT TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP(),
+  EVENT VARIANT
+);
+
+-- 6) Quick validation (optional)
+-- List files Snowflake can see in the stage:
+-- LIST @RETAIL_AI.BRONZE.S3_RAW_STAGE;
+
+-- Sanity check file formats/stages:
+-- SHOW STAGES IN DATABASE RETAIL_AI;
+-- SHOW FILE FORMATS IN DATABASE RETAIL_AI;
