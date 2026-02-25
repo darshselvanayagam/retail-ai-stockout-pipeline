@@ -23,24 +23,9 @@ def run_sql(sql: str):
         cur = conn.cursor()
         for stmt in [s.strip() for s in sql.split(";") if s.strip()]:
             cur.execute(stmt)
-        # small log so UI stays readable
-        print("✅ Ran SQL block successfully", flush=True)
+        print("Ran SQL block successfully", flush=True)
     finally:
         conn.close()
-
-
-def copy_into_bronze():
-    sql = r"""
-    COPY INTO RETAIL_AI.BRONZE.RAW_EVENTS (EVENT)
-    FROM (
-      SELECT $1
-      FROM @RETAIL_AI.BRONZE.S3_RAW_STAGE
-    )
-    FILE_FORMAT = (FORMAT_NAME = RETAIL_AI.STAGING.JSONL_FORMAT)
-    PATTERN = '.*\.jsonl'
-    ON_ERROR = 'CONTINUE';
-    """
-    run_sql(sql)
 
 
 SILVER_SQL = """
@@ -142,36 +127,31 @@ LEFT JOIN RETAIL_AI.GOLD.FACT_INVENTORY_DAILY i
 
 
 with DAG(
-    dag_id="retail_pipeline_bronze_to_gold",
+    dag_id="pipeline_bronze_to_gold",
     start_date=datetime(2026, 2, 19),
     schedule_interval=None,  # manual while learning
     catchup=False,
     tags=["retail", "snowflake"],
 ) as dag:
 
-    t1_bronze = PythonOperator(
-        task_id="copy_into_bronze",
-        python_callable=copy_into_bronze,
-    )
-
-    t2_silver = PythonOperator(
+    t1_silver = PythonOperator(
         task_id="build_silver",
         python_callable=lambda: run_sql(SILVER_SQL),
     )
 
-    t3_dims = PythonOperator(
+    t2_dims = PythonOperator(
         task_id="build_gold_dims",
         python_callable=lambda: run_sql(GOLD_DIMS_SQL),
     )
 
-    t4_facts = PythonOperator(
+    t3_facts = PythonOperator(
         task_id="build_gold_facts",
         python_callable=lambda: run_sql(GOLD_FACTS_SQL),
     )
 
-    t5_features = PythonOperator(
+    t4_features = PythonOperator(
         task_id="build_features",
         python_callable=lambda: run_sql(FEATURES_SQL),
     )
 
-    t1_bronze >> t2_silver >> t3_dims >> t4_facts >> t5_features
+    t1_silver >> t2_dims >> t3_facts >> t4_features

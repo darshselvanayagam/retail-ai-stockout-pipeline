@@ -21,10 +21,10 @@ def run_sql(sql: str):
     conn = _connect()
     try:
         cur = conn.cursor()
+        # Execute statements split by semicolon (safe for simple SQL blocks)
         for stmt in [s.strip() for s in sql.split(";") if s.strip()]:
             cur.execute(stmt)
-        # small log so UI stays readable
-        print("✅ Ran SQL block successfully", flush=True)
+        print("Bronze COPY INTO completed", flush=True)
     finally:
         conn.close()
 
@@ -38,205 +38,23 @@ def copy_into_bronze():
     )
     FILE_FORMAT = (FORMAT_NAME = RETAIL_AI.STAGING.JSONL_FORMAT)
     PATTERN = '.*\.jsonl'
-    ON_ERROR = 'CONTINUE';
+    ON_ERROR = 'CONTINUE'
+    ;
     """
     run_sql(sql)
 
 
-def train_and_write_predictions():
-    import pandas as pd
-    from sklearn.linear_model import LogisticRegression
-
-    conn = _connect()
-    try:
-        query = """
-        SELECT
-            TOTAL_QTY_SOLD,
-            SALES_EVENT_COUNT,
-            COALESCE(ON_HAND_LATEST, 0) AS ON_HAND_LATEST,
-            STOCKOUT_RISK_LABEL
-        FROM RETAIL_AI.GOLD.FEATURES_DAILY
-        WHERE STOCKOUT_RISK_LABEL IS NOT NULL
-        """
-        df = pd.read_sql(query, conn)
-
-        X = df[["TOTAL_QTY_SOLD", "SALES_EVENT_COUNT", "ON_HAND_LATEST"]]
-        y = df["STOCKOUT_RISK_LABEL"]
-
-        model = LogisticRegression()
-        model.fit(X, y)
-
-        df["PRED_STOCKOUT_PROB"] = model.predict_proba(X)[:, 1]
-
-        cur = conn.cursor()
-        cur.execute("""
-        CREATE OR REPLACE TABLE RETAIL_AI.GOLD.STOCKOUT_PREDICTIONS (
-            TOTAL_QTY_SOLD NUMBER,
-            SALES_EVENT_COUNT NUMBER,
-            ON_HAND_LATEST NUMBER,
-            STOCKOUT_RISK_LABEL NUMBER,
-            PRED_STOCKOUT_PROB FLOAT,
-            PREDICTED_AT TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
-        )
-        """)
-
-        # Insert using executemany (much faster than loop)
-        insert_sql = """
-        INSERT INTO RETAIL_AI.GOLD.STOCKOUT_PREDICTIONS
-        (TOTAL_QTY_SOLD, SALES_EVENT_COUNT, ON_HAND_LATEST, STOCKOUT_RISK_LABEL, PRED_STOCKOUT_PROB)
-        VALUES (%s, %s, %s, %s, %s)
-        """
-        rows = list(
-            zip(
-                df["TOTAL_QTY_SOLD"],
-                df["SALES_EVENT_COUNT"],
-                df["ON_HAND_LATEST"],
-                df["STOCKOUT_RISK_LABEL"],
-                df["PRED_STOCKOUT_PROB"],
-            )
-        )
-        cur.executemany(insert_sql, rows)
-
-        print(f"✅ Model trained. Rows used: {len(df)}", flush=True)
-        print("✅ Predictions written to RETAIL_AI.GOLD.STOCKOUT_PREDICTIONS", flush=True)
-
-    finally:
-        conn.close()
-SILVER_SQL = """
-CREATE SCHEMA IF NOT EXISTS RETAIL_AI.SILVER;
-
-CREATE OR REPLACE TABLE RETAIL_AI.SILVER.SALES_EVENTS AS
-SELECT
-  EVENT:event_time::timestamp_ntz AS event_time,
-  EVENT:event_date::date          AS event_date,
-  EVENT:store_id::string          AS store_id,
-  EVENT:product_id::string        AS product_id,
-  EVENT:qty::number               AS qty
-FROM RETAIL_AI.BRONZE.RAW_EVENTS
-WHERE EVENT:event_type::string = 'sale';
-
-CREATE OR REPLACE TABLE RETAIL_AI.SILVER.INVENTORY_EVENTS AS
-SELECT
-  EVENT:event_time::timestamp_ntz AS event_time,
-  EVENT:event_date::date          AS event_date,
-  EVENT:store_id::string          AS store_id,
-  EVENT:product_id::string        AS product_id,
-  EVENT:on_hand::number           AS on_hand
-FROM RETAIL_AI.BRONZE.RAW_EVENTS
-WHERE EVENT:event_type::string = 'inventory';
-"""
-
-
-GOLD_DIMS_SQL = """
-CREATE SCHEMA IF NOT EXISTS RETAIL_AI.GOLD;
-
-CREATE OR REPLACE TABLE RETAIL_AI.GOLD.DIM_DATE AS
-SELECT DISTINCT
-    EVENT:event_date::date                AS date,
-    YEAR(EVENT:event_date::date)          AS year,
-    MONTH(EVENT:event_date::date)         AS month,
-    DAY(EVENT:event_date::date)           AS day,
-    DAYOFWEEK(EVENT:event_date::date)     AS day_of_week
-FROM RETAIL_AI.BRONZE.RAW_EVENTS
-WHERE EVENT:event_date IS NOT NULL;
-
-CREATE OR REPLACE TABLE RETAIL_AI.GOLD.DIM_STORE AS
-SELECT DISTINCT
-    EVENT:store_id::string AS store_id
-FROM RETAIL_AI.BRONZE.RAW_EVENTS
-WHERE EVENT:store_id IS NOT NULL;
-
-CREATE OR REPLACE TABLE RETAIL_AI.GOLD.DIM_PRODUCT AS
-SELECT DISTINCT
-    EVENT:product_id::string AS product_id
-FROM RETAIL_AI.BRONZE.RAW_EVENTS
-WHERE EVENT:product_id IS NOT NULL;
-"""
-
-
-GOLD_FACTS_SQL = """
-CREATE OR REPLACE TABLE RETAIL_AI.GOLD.FACT_SALES_DAILY AS
-SELECT
-  EVENT:event_date::date      AS date,
-  EVENT:store_id::string      AS store_id,
-  EVENT:product_id::string    AS product_id,
-  SUM(EVENT:qty::number)      AS total_qty_sold,
-  COUNT(*)                    AS sales_event_count
-FROM RETAIL_AI.BRONZE.RAW_EVENTS
-WHERE EVENT:event_type::string = 'sale'
-GROUP BY 1,2,3;
-
-CREATE OR REPLACE TABLE RETAIL_AI.GOLD.FACT_INVENTORY_DAILY AS
-SELECT
-  EVENT:event_date::date            AS date,
-  EVENT:store_id::string            AS store_id,
-  EVENT:product_id::string          AS product_id,
-  EVENT:on_hand::number             AS on_hand_latest,
-  EVENT:event_time::timestamp_ntz   AS last_inventory_time
-FROM RETAIL_AI.BRONZE.RAW_EVENTS
-WHERE EVENT:event_type::string = 'inventory'
-QUALIFY ROW_NUMBER() OVER (
-  PARTITION BY EVENT:event_date::date, EVENT:store_id::string, EVENT:product_id::string
-  ORDER BY EVENT:event_time::timestamp_ntz DESC
-) = 1;
-"""
-
-
-FEATURES_SQL = """
-CREATE OR REPLACE TABLE RETAIL_AI.GOLD.FEATURES_DAILY AS
-SELECT
-  s.date,
-  s.store_id,
-  s.product_id,
-  s.total_qty_sold,
-  s.sales_event_count,
-  i.on_hand_latest,
-  CASE WHEN i.on_hand_latest <= 2 THEN 1 ELSE 0 END AS stockout_risk_label
-FROM RETAIL_AI.GOLD.FACT_SALES_DAILY s
-LEFT JOIN RETAIL_AI.GOLD.FACT_INVENTORY_DAILY i
-  ON s.date = i.date
- AND s.store_id = i.store_id
- AND s.product_id = i.product_id;
-"""
-
-
 with DAG(
-    dag_id="retail_pipeline_bronze_to_gold",
+    dag_id="bronze_copy_raw_events",
     start_date=datetime(2026, 2, 19),
-    schedule_interval=None,  # manual while learning
+    schedule_interval=None,  # keep manual while learning
     catchup=False,
-    tags=["retail", "snowflake"],
+    tags=["retail", "snowflake", "bronze"],
 ) as dag:
 
-    t1_bronze = PythonOperator(
+    t1_copy_into_bronze = PythonOperator(
         task_id="copy_into_bronze",
         python_callable=copy_into_bronze,
     )
 
-    t2_silver = PythonOperator(
-        task_id="build_silver",
-        python_callable=lambda: run_sql(SILVER_SQL),
-    )
-
-    t3_dims = PythonOperator(
-        task_id="build_gold_dims",
-        python_callable=lambda: run_sql(GOLD_DIMS_SQL),
-    )
-
-    t4_facts = PythonOperator(
-        task_id="build_gold_facts",
-        python_callable=lambda: run_sql(GOLD_FACTS_SQL),
-    )
-
-    t5_features = PythonOperator(
-        task_id="build_features",
-        python_callable=lambda: run_sql(FEATURES_SQL),
-    )
-
-    t6_predict = PythonOperator(
-    task_id="train_and_write_predictions",
-    python_callable=train_and_write_predictions,
-)
-
-t1_bronze >> t2_silver >> t3_dims >> t4_facts >> t5_features >> t6_predict
-
+    t1_copy_into_bronze
