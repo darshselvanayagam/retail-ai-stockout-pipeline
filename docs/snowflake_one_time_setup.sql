@@ -15,7 +15,6 @@ CREATE OR REPLACE FILE FORMAT RETAIL_AI.STAGING.JSONL_FORMAT
   TYPE = JSON;
 
 -- 3) Storage integration (S3)
--- Replace with your AWS IAM Role ARN that Snowflake can assume.
 CREATE OR REPLACE STORAGE INTEGRATION S3_INT_RETAIL
   TYPE = EXTERNAL_STAGE
   STORAGE_PROVIDER = S3
@@ -23,7 +22,6 @@ CREATE OR REPLACE STORAGE INTEGRATION S3_INT_RETAIL
   STORAGE_AWS_ROLE_ARN = '<AWS_IAM_ROLE_ARN>'
   STORAGE_ALLOWED_LOCATIONS = ('s3://retail-ai-platform-darshini-001/');
 
--- Get the Snowflake-generated IAM user/External ID and add it to your AWS role trust policy:
 DESC INTEGRATION S3_INT_RETAIL;
 
 -- 4) External stage pointing to raw S3 prefix
