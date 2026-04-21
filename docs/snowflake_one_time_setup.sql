@@ -36,10 +36,3 @@ CREATE TABLE IF NOT EXISTS RETAIL_AI.BRONZE.RAW_EVENTS (
   EVENT VARIANT
 );
 
--- 6) Quick validation (optional)
--- List files Snowflake can see in the stage:
--- LIST @RETAIL_AI.BRONZE.S3_RAW_STAGE;
-
--- Sanity check file formats/stages:
--- SHOW STAGES IN DATABASE RETAIL_AI;
--- SHOW FILE FORMATS IN DATABASE RETAIL_AI;
