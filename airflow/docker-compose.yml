@@ -8,7 +8,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__WEBSERVER__BASE_URL: "http://localhost:8080"
     AIRFLOW__LOGGING__BASE_LOG_FOLDER: "/opt/airflow/logs"
 
-    # Snowflake (pulled from your Mac shell exports)
+    # Snowflake (pulled from your OS Env )
     SF_ACCOUNT: ${SF_ACCOUNT}
     SF_USER: ${SF_USER}
     SF_PASSWORD: ${SF_PASSWORD}
